@@ -1,5 +1,7 @@
 """Otel demo kafkaQueueProblems feature flag fault."""
 
+import json
+import subprocess
 from typing import Any
 
 from aiopslab.orchestrator.tasks import *
@@ -107,36 +109,34 @@ class KafkaQueueProblemsMitigation(KafkaQueueProblemsBaseTask, MitigationTask):
         print("== Evaluation ==")
         super().eval(soln, trace, duration)
 
-        # Check if all services (not only faulty service) is back to normal (Running)
-        pod_list = self.kubectl.list_pods(self.namespace)
-        all_normal = True
+        # Kafka Queue Problems is a feature flag fault, not a pod crash issue
+        # Check if the feature flag has been recovered (set to "off")
+        configmap_name = "flagd-config"
+        feature_flag = "kafkaQueueProblems"
+        
+        try:
+            command = (
+                f"kubectl get configmap {configmap_name} -n {self.namespace} -o json"
+            )
+            output = self.kubectl.exec_command(command)
+            configmap = json.loads(output)
+            flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
+            
+            if feature_flag in flagd_data["flags"]:
+                current_value = flagd_data["flags"][feature_flag].get("defaultVariant", "")
+                if current_value.lower() == "off":
+                    print(f"Feature flag '{feature_flag}' is correctly set to 'off'")
+                    self.results["success"] = True
+                else:
+                    print(
+                        f"Feature flag '{feature_flag}' is still set to '{current_value}', expected 'off'"
+                    )
+                    self.results["success"] = False
+            else:
+                print(f"Feature flag '{feature_flag}' not found in ConfigMap")
+                self.results["success"] = False
+        except (subprocess.CalledProcessError, json.JSONDecodeError, KeyError) as e:
+            print(f"Error checking feature flag status: {e}")
+            self.results["success"] = False
 
-        for pod in pod_list.items:
-            if pod.status.container_statuses:
-                # Check container statuses
-                for container_status in pod.status.container_statuses:
-                    if (
-                        container_status.state.waiting
-                        and container_status.state.waiting.reason == "CrashLoopBackOff"
-                    ):
-                        print(
-                            f"Container {container_status.name} is in CrashLoopBackOff"
-                        )
-                        all_normal = False
-                    elif (
-                        container_status.state.terminated
-                        and container_status.state.terminated.reason != "Completed"
-                    ):
-                        print(
-                            f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}"
-                        )
-                        all_normal = False
-                    elif not container_status.ready:
-                        print(f"Container {container_status.name} is not ready")
-                        all_normal = False
-
-                if not all_normal:
-                    break
-
-        self.results["success"] = all_normal
         return self.results
