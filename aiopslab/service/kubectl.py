@@ -20,9 +20,16 @@ class KubeCtl:
         import os
         
         # Support parallel execution via AIOPSLAB_CLUSTER environment variable
-        cluster_env = os.environ.get('AIOPSLAB_CLUSTER', 'kind')
-        context = f"kind-{cluster_env}"
-        config.load_kube_config(context=context)
+        # If AIOPSLAB_CLUSTER is set, use kind-{cluster} context, otherwise use default kubeconfig
+        cluster_env = os.environ.get('AIOPSLAB_CLUSTER')
+        if cluster_env:
+            # For kind clusters, use kind-{cluster} context
+            context = f"kind-{cluster_env}"
+            config.load_kube_config(context=context)
+        else:
+            # For regular Kubernetes clusters, use default kubeconfig context
+            # This allows using any kubeconfig context (local, remote, cloud clusters)
+            config.load_kube_config()
         
         self.core_v1_api = client.CoreV1Api()
         self.apps_v1_api = client.AppsV1Api()
