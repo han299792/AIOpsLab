@@ -32,17 +32,6 @@ class MitigationTask(Task):
 
             You will begin by analyzing the service's state and telemetry, and then submit a solution that mitigates any detected anomalies.
             Your mitigation can be performed using any of the available APIs.
-
-            IMPORTANT: When mitigating issues, ensure you complete ALL necessary steps:
-            1. Fix the root cause (e.g., create missing users, restore permissions, fix configurations)
-            2. Verify the fix is complete (e.g., grant all required permissions, not just create users)
-            3. Restart affected services/pods to apply changes (e.g., delete pods or restart deployments)
-            4. Wait for services to become ready before submitting
-            
-            For example, if fixing a MongoDB authentication issue:
-            - Create the user AND grant required roles (readWrite, etc.)
-            - Restart the affected service pods to reconnect with new credentials
-            - Verify pods are running and ready before submitting
             """
 
         self.instructions = """\
@@ -86,3 +75,53 @@ class MitigationTask(Task):
         self.add_result("TTM", duration)
         self.common_eval(trace)
         return self.results
+    
+    def wait_for_pods_stable(self, max_wait_seconds: int = 60, check_interval: int = 5) -> bool:
+        """
+        시스템이 안정화될 때까지 대기하는 헬퍼 함수.
+        AI가 submit한 뒤, 평가 전에 호출하여 Pod들이 복구될 시간을 제공합니다.
+        
+        Args:
+            max_wait_seconds: 최대 대기 시간 (초)
+            check_interval: 상태 확인 간격 (초)
+        
+        Returns:
+            bool: 모든 Pod가 정상 상태면 True, 아니면 False
+        """
+        from time import sleep
+        
+        max_attempts = max_wait_seconds // check_interval
+        
+        for attempt in range(max_attempts):
+            pod_list = self.kubectl.list_pods(self.namespace)
+            all_normal = True
+
+            for pod in pod_list.items:
+                if not pod.status.container_statuses:
+                    continue
+                    
+                for container_status in pod.status.container_statuses:
+                    if container_status.state.waiting:
+                        reason = container_status.state.waiting.reason
+                        if reason in ["CrashLoopBackOff", "Error", "ImagePullBackOff", "ErrImagePull"]:
+                            print(f"Container {container_status.name} is in error state: {reason}")
+                            all_normal = False
+                    elif container_status.state.terminated and container_status.state.terminated.reason != "Completed":
+                        print(f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}")
+                        all_normal = False
+                    elif not container_status.ready:
+                        print(f"Container {container_status.name} is not ready")
+                        all_normal = False
+
+                if not all_normal:
+                    break
+            
+            if all_normal:
+                if attempt > 0:
+                    print(f"All pods are healthy after {attempt * check_interval} seconds")
+                return True
+            
+            if attempt < max_attempts - 1:  # Don't sleep on last attempt
+                sleep(check_interval)
+
+        return False

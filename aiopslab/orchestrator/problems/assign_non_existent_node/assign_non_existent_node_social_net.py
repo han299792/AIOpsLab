@@ -194,32 +194,9 @@ class AssignNonExistentNodeSocialNetMitigation(
             print(f"Pod named {self.faulty_service} does not exist.")
             all_normal = False
         else:
-            for pod in pod_list.items:
-                if pod.status.container_statuses:
-                    for container_status in pod.status.container_statuses:
-                        if (
-                            container_status.state.waiting
-                            and container_status.state.waiting.reason
-                            == "CrashLoopBackOff"
-                        ):
-                            print(
-                                f"Container {container_status.name} is in CrashLoopBackOff"
-                            )
-                            all_normal = False
-                        elif (
-                            container_status.state.terminated
-                            and container_status.state.terminated.reason != "Completed"
-                        ):
-                            print(
-                                f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}"
-                            )
-                            all_normal = False
-                        elif not container_status.ready:
-                            print(f"Container {container_status.name} is not ready")
-                            all_normal = False
-
-                if not all_normal:
-                    break
+            # 시스템이 안정화될 때까지 대기 (최대 1분)
+            pod_stable = self.wait_for_pods_stable(max_wait_seconds=60, check_interval=5)
+            all_normal = all_normal and pod_stable
 
         self.results["success"] = all_normal
         return self.results

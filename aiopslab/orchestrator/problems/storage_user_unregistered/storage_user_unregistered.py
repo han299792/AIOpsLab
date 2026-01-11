@@ -220,45 +220,8 @@ class MongoDBUserUnregisteredMitigation(
         # 자동 복구: AI가 누락한 단계 보완
         self._auto_recover_if_needed()
 
-        # Check if all services (not only faulty service) is back to normal (Running)
-        # Polling for up to 1 minute to allow pods time to recover
-        from time import sleep
-        all_normal = False
-        
-        for attempt in range(12):  # 5 seconds interval, 12 times, total 1 minute
-            pod_list = self.kubectl.list_pods(self.namespace)
-            all_normal = True
-
-            for pod in pod_list.items:
-                # Check container statuses
-                for container_status in pod.status.container_statuses:
-                    if (
-                        container_status.state.waiting
-                        and container_status.state.waiting.reason == "CrashLoopBackOff"
-                    ):
-                        print(f"Container {container_status.name} is in CrashLoopBackOff")
-                        all_normal = False
-                    elif (
-                        container_status.state.terminated
-                        and container_status.state.terminated.reason != "Completed"
-                    ):
-                        print(
-                            f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}"
-                        )
-                        all_normal = False
-                    elif not container_status.ready:
-                        print(f"Container {container_status.name} is not ready")
-                        all_normal = False
-
-                if not all_normal:
-                    break
-
-            if all_normal:
-                print(f"All pods are healthy after {attempt * 5} seconds")
-                break
-            
-            if attempt < 11:  # Don't sleep on last attempt
-                sleep(5)
+        # 시스템이 안정화될 때까지 대기 (최대 1분)
+        all_normal = self.wait_for_pods_stable(max_wait_seconds=60, check_interval=5)
 
         self.results["success"] = all_normal
         return self.results
