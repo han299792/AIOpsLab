@@ -10,6 +10,7 @@ import os
 import asyncio
 import tiktoken
 import wandb
+from openai import APITimeoutError
 from aiopslab.orchestrator import Orchestrator
 from aiopslab.orchestrator.problems.registry import ProblemRegistry
 from clients.utils.llm import GPTClient
@@ -26,8 +27,15 @@ def count_message_tokens(message, enc):
     tokens += len(enc.encode(message.get("content", "")))
     return tokens
 
-def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-4"):
-    enc = tiktoken.encoding_for_model(model)
+def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-5.1-codex"):
+    try:
+        # 1. 먼저 자동으로 시도
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # 2. 실패하면 최신 인코딩(o200k_base)을 강제로 사용
+        # GPT-5 계열은 보통 GPT-4o와 같은 o200k_base를 사용합니다.
+        print(f"Warning: {model} not found in tiktoken. Using o200k_base.")
+        enc = tiktoken.get_encoding("o200k_base")
 
     trimmed = []
     total_tokens = 0
@@ -91,12 +99,31 @@ class GPTAgent:
         Returns:
             str: The response from the agent.
         """
+        import time
+        
         self.history.append({"role": "user", "content": input})
         trimmed_history = trim_history_to_token_limit(self.history)
-        response = self.llm.run(trimmed_history)
-        print(f"===== Agent (GPT-4o-mini) ====\n{response}")
-        self.history.append({"role": "assistant", "content": response[0]})
-        return response[0]
+        
+        # Retry logic for API timeouts
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = self.llm.run(trimmed_history)
+                print(f"===== Agent (GPT-4o-mini) ====\n{response}")
+                self.history.append({"role": "assistant", "content": response[0]})
+                return response[0]
+            except APITimeoutError as e:
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    print(f"API timeout in get_action (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"API timeout after {max_retries} attempts in get_action. Raising exception.")
+                    raise
+            except Exception as e:
+                # For other errors, don't retry
+                print(f"Error in get_action: {repr(e)}")
+                raise
 
     def _filter_dict(self, dictionary, filter_func):
         return {k: v for k, v in dictionary.items() if filter_func(k, v)}

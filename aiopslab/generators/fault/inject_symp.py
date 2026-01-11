@@ -169,6 +169,10 @@ class SymptomFaultInjector(FaultInjector):
             microservices (List[str]): A list of microservices labels to target for the pod kill experiment.
             duration (str): The duration for which the pod kill fault should be active.
         """
+        # For multiple microservices, use the first one (mode="one" only kills one pod)
+        # If you need to kill multiple pods, you would need multiple PodChaos experiments
+        service_label = microservices[0] if microservices else "user"
+        
         chaos_experiment = {
             "apiVersion": "chaos-mesh.org/v1alpha1",
             "kind": "PodChaos",
@@ -178,7 +182,7 @@ class SymptomFaultInjector(FaultInjector):
                 "mode": "one",
                 "duration": duration,
                 "selector": {
-                    "labelSelectors": {"io.kompose.service": ", ".join(microservices)}
+                    "labelSelectors": {"io.kompose.service": service_label}
                 },
             },
         }

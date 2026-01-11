@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from groq import Groq
 from openai import OpenAI, AzureOpenAI
+from openai import APITimeoutError, RateLimitError
 from azure.identity import get_bearer_token_provider, AzureCliCredential, ManagedIdentityCredential
 
 from dotenv import load_dotenv
@@ -111,30 +112,76 @@ class GPTClient:
         else:
             raise ValueError("auth_type must be one of 'key', 'cli', or 'managed_identity'")
 
-    def inference(self, payload: list[dict[str, str]]) -> list[str]:
+    def inference(self, payload: list[dict[str, str]], max_retries: int = 3) -> list[str]:
         if self.cache is not None:
             cache_result = self.cache.get_from_cache(payload)
             if cache_result is not None:
                 return cache_result
 
-        try:
-            response = self.client.chat.completions.create(
-                messages=payload,  # type: ignore
-                model=GPT_MODEL,
-                max_tokens=1024,
-                temperature=0.5,
-                top_p=0.95,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
-                n=1,
-                timeout=60,
-                stop=[],
-            )
-        except Exception as e:
-            print(f"Exception: {repr(e)}")
-            raise e
-
-        return [c.message.content for c in response.choices]  # type: ignore
+        import time
+        
+        last_exception = None
+        for attempt in range(max_retries):
+            try:
+                # Increase timeout for longer requests (60s -> 120s)
+                # Also add exponential backoff for retries
+                timeout_seconds = 120 if attempt == 0 else 120 + (attempt * 30)
+                
+                response = self.client.chat.completions.create(
+                    messages=payload,  # type: ignore
+                    model=GPT_MODEL,
+                    max_tokens=1024,
+                    temperature=0.5,
+                    top_p=0.95,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
+                    n=1,
+                    timeout=timeout_seconds,
+                    stop=[],
+                )
+                return [c.message.content for c in response.choices]  # type: ignore
+                
+            except APITimeoutError as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2  # Exponential backoff: 2s, 4s, 6s
+                    print(f"API timeout (attempt {attempt + 1}/{max_retries}). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"API timeout after {max_retries} attempts. Giving up.")
+                    raise
+            except RateLimitError as e:
+                last_exception = e
+                if attempt < max_retries - 1:
+                    # For rate limit, wait longer (exponential backoff with longer base)
+                    wait_time = 10 + (attempt * 5)  # 10s, 15s, 20s
+                    print(f"Rate limit error (attempt {attempt + 1}/{max_retries}). Waiting {wait_time}s before retry...")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Rate limit error after {max_retries} attempts. Giving up.")
+                    raise
+            except Exception as e:
+                # Check if it's a rate limit error (fallback for other rate limit formats)
+                error_str = str(e).lower()
+                if "rate limit" in error_str or "429" in error_str or "rate_limit" in error_str:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = 10 + (attempt * 5)  # 10s, 15s, 20s
+                        print(f"Rate limit error (attempt {attempt + 1}/{max_retries}). Waiting {wait_time}s before retry...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print(f"Rate limit error after {max_retries} attempts. Giving up.")
+                        raise
+                # For non-timeout, non-rate-limit errors, don't retry
+                print(f"Exception: {repr(e)}")
+                raise e
+        
+        # Should not reach here, but just in case
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Unexpected error in inference")
 
     def run(self, payload: list[dict[str, str]]) -> list[str]:
         response = self.inference(payload)

@@ -159,18 +159,21 @@ class Orchestrator:
         # catch any exception and recover fault before the users catch it
         try:
             for step in range(max_steps):
-                action = await self.ask_agent(action_instr)
-                self.sprint.agent(action)
+                try:
+                    action = await self.ask_agent(action_instr)
+                    self.sprint.agent(action)
 
-                env_response = await self.ask_env(action)
-                self.sprint.service(env_response)
+                    env_response = await self.ask_env(action)
+                    self.sprint.service(env_response)
 
-                if env_response == SubmissionStatus.VALID_SUBMISSION:
-                    break
-                elif env_response == SubmissionStatus.INVALID_SUBMISSION:
-                    raise ValueError("Invalid submission!")  # TODO (@manish): ask to retry?
+                    if env_response == SubmissionStatus.VALID_SUBMISSION:
+                        break
+                    elif env_response == SubmissionStatus.INVALID_SUBMISSION:
+                        raise ValueError("Invalid submission!")  # TODO (@manish): ask to retry?
 
-                action_instr = env_response + "\n" + "Please take the next action"
+                    action_instr = env_response + "\n" + "Please take the next action"
+                except Exception as step_error:
+                    raise
         except Exception as e:
             # Make sure the fault cleanup function is unregistered
             # after recovering fault ahead because of exceptions

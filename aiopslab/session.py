@@ -116,7 +116,8 @@ class Session:
 
     def to_json(self):
         """Save the session to a JSON file."""
-        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
+        from pathlib import Path
+        results_dir = Path(self.results_dir) if self.results_dir else RESULTS_DIR
         results_dir.mkdir(parents=True, exist_ok=True)
 
         with open(results_dir / f"{self.session_id}_{self.start_time}.json", "w") as f:
@@ -128,7 +129,8 @@ class Session:
 
     def from_json(self, filename: str):
         """Load a session from a JSON file."""
-        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
+        from pathlib import Path
+        results_dir = Path(self.results_dir) if self.results_dir else RESULTS_DIR
 
         with open(results_dir / filename, "r") as f:
             data = json.load(f)

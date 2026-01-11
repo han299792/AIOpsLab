@@ -32,6 +32,17 @@ class MitigationTask(Task):
 
             You will begin by analyzing the service's state and telemetry, and then submit a solution that mitigates any detected anomalies.
             Your mitigation can be performed using any of the available APIs.
+
+            IMPORTANT: When mitigating issues, ensure you complete ALL necessary steps:
+            1. Fix the root cause (e.g., create missing users, restore permissions, fix configurations)
+            2. Verify the fix is complete (e.g., grant all required permissions, not just create users)
+            3. Restart affected services/pods to apply changes (e.g., delete pods or restart deployments)
+            4. Wait for services to become ready before submitting
+            
+            For example, if fixing a MongoDB authentication issue:
+            - Create the user AND grant required roles (readWrite, etc.)
+            - Restart the affected service pods to reconnect with new credentials
+            - Verify pods are running and ready before submitting
             """
 
         self.instructions = """\

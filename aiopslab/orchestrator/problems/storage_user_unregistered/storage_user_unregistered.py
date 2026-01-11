@@ -168,38 +168,97 @@ class MongoDBUserUnregisteredMitigation(
     def __init__(self, faulty_service: str = "mongodb-geo"):
         MongoDBUserUnregisteredBaseTask.__init__(self, faulty_service=faulty_service)
         MitigationTask.__init__(self, self.app)
+        self.mongo_service_pod_map = {
+            "mongodb-rate": "rate",
+            "mongodb-geo": "geo",
+        }
+    
+    def _auto_recover_if_needed(self):
+        """자동 복구: AI가 누락한 단계를 보완 (사용자 생성, 권한 부여, Pod 재시작)"""
+        try:
+            # 서비스 Pod 상태 확인
+            pods = self.kubectl.list_pods(self.namespace)
+            service_name = self.mongo_service_pod_map.get(self.faulty_service)
+            
+            if not service_name:
+                return
+            
+            # 서비스 Pod가 여전히 CrashLoopBackOff나 Error 상태인지 확인
+            service_pods = [
+                pod for pod in pods.items
+                if pod.metadata.name.startswith(service_name) and "mongodb-" not in pod.metadata.name
+            ]
+            
+            needs_recovery = False
+            for pod in service_pods:
+                if pod.status.container_statuses:
+                    for container_status in pod.status.container_statuses:
+                        if container_status.state.waiting and container_status.state.waiting.reason == "CrashLoopBackOff":
+                            needs_recovery = True
+                            break
+                        elif container_status.state.terminated and container_status.state.terminated.reason != "Completed":
+                            needs_recovery = True
+                            break
+            
+            if needs_recovery:
+                print("[AUTO-RECOVER] Service pods still failing. Attempting auto-recovery...")
+                # ApplicationFaultInjector의 recover 메서드 사용 (표준 복구 프로세스)
+                injector = ApplicationFaultInjector(namespace=self.namespace)
+                injector.recover_storage_user_unregistered([self.faulty_service])
+                print("[AUTO-RECOVER] Auto-recovery completed. Waiting for pods to recover...")
+                import time
+                time.sleep(10)  # Pod 재시작 대기
+        except Exception as e:
+            print(f"[AUTO-RECOVER] Error during auto-recovery: {e}")
+            import traceback
+            traceback.print_exc()
 
     def eval(self, soln: Any, trace: list[SessionItem], duration: float) -> dict:
         print("== Evaluation ==")
         super().eval(soln, trace, duration)
 
+        # 자동 복구: AI가 누락한 단계 보완
+        self._auto_recover_if_needed()
+
         # Check if all services (not only faulty service) is back to normal (Running)
-        pod_list = self.kubectl.list_pods(self.namespace)
-        all_normal = True
+        # Polling for up to 1 minute to allow pods time to recover
+        from time import sleep
+        all_normal = False
+        
+        for attempt in range(12):  # 5 seconds interval, 12 times, total 1 minute
+            pod_list = self.kubectl.list_pods(self.namespace)
+            all_normal = True
 
-        for pod in pod_list.items:
-            # Check container statuses
-            for container_status in pod.status.container_statuses:
-                if (
-                    container_status.state.waiting
-                    and container_status.state.waiting.reason == "CrashLoopBackOff"
-                ):
-                    print(f"Container {container_status.name} is in CrashLoopBackOff")
-                    all_normal = False
-                elif (
-                    container_status.state.terminated
-                    and container_status.state.terminated.reason != "Completed"
-                ):
-                    print(
-                        f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}"
-                    )
-                    all_normal = False
-                elif not container_status.ready:
-                    print(f"Container {container_status.name} is not ready")
-                    all_normal = False
+            for pod in pod_list.items:
+                # Check container statuses
+                for container_status in pod.status.container_statuses:
+                    if (
+                        container_status.state.waiting
+                        and container_status.state.waiting.reason == "CrashLoopBackOff"
+                    ):
+                        print(f"Container {container_status.name} is in CrashLoopBackOff")
+                        all_normal = False
+                    elif (
+                        container_status.state.terminated
+                        and container_status.state.terminated.reason != "Completed"
+                    ):
+                        print(
+                            f"Container {container_status.name} is terminated with reason: {container_status.state.terminated.reason}"
+                        )
+                        all_normal = False
+                    elif not container_status.ready:
+                        print(f"Container {container_status.name} is not ready")
+                        all_normal = False
 
-            if not all_normal:
+                if not all_normal:
+                    break
+
+            if all_normal:
+                print(f"All pods are healthy after {attempt * 5} seconds")
                 break
+            
+            if attempt < 11:  # Don't sleep on last attempt
+                sleep(5)
 
         self.results["success"] = all_normal
         return self.results

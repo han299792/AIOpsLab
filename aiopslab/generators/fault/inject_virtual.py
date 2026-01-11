@@ -1,13 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Inject faults at the virtualization layer: K8S, Docker, etc."""
+"""Inject faults at the virtualization layer: K8S, etc."""
 
 import yaml
 import time
 
 from aiopslab.service.kubectl import KubeCtl
-from aiopslab.service.dock import Docker
 from aiopslab.generators.fault.base import FaultInjector
 from aiopslab.service.apps.base import Application
 
@@ -17,7 +16,6 @@ class VirtualizationFaultInjector(FaultInjector):
         super().__init__(namespace)
         self.namespace = namespace
         self.kubectl = KubeCtl()
-        self.docker = Docker()
 
     def delete_service_pods(self, target_service_pods: list[str]):
         """Kill the corresponding service pod to enforce the fault."""
@@ -170,32 +168,102 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from wrong binary usage fault for service: {service}")
             
     def inject_container_stop(self, microservices: list[str]):
-        """Inject a fault to stop a container."""
+        """Inject a fault to stop a pod (delete pod)."""
         for service in microservices:
-            self.docker.get_container(service).stop()
-            print(f"Stopped container {service}.")
+            try:
+                # Try to find pod by label selector
+                pod_name = None
+                try:
+                    pod_name = self.kubectl.get_pod_name(self.namespace, f"app={service}")
+                except (IndexError, Exception):
+                    try:
+                        pod_name = self.kubectl.get_pod_name(self.namespace, f"io.kompose.service={service}")
+                    except (IndexError, Exception):
+                        # Last fallback: search by pod name containing service name
+                        pod_list = self.kubectl.list_pods(self.namespace)
+                        matching_pods = [p for p in pod_list.items if service in p.metadata.name]
+                        if matching_pods:
+                            pod_name = matching_pods[0].metadata.name
+                
+                if pod_name:
+                    # Delete the pod (it will be automatically recreated by deployment/replicaset)
+                    self.kubectl.exec_command(f"kubectl delete pod {pod_name} -n {self.namespace}")
+                    print(f"Deleted pod {pod_name} (service: {service}).")
+                else:
+                    print(f"Warning: No pod found for service {service} in namespace {self.namespace}")
+            except Exception as e:
+                print(f"Error stopping pod for service {service}: {e}")
             
             print("Waiting for faults to propagate...")
             time.sleep(15)
             print("Faults propagated.") 
     
     def recover_container_stop(self, microservices: list[str]):
+        """Recover from container stop fault (pods will be automatically recreated by deployment)."""
         for service in microservices:
-            self.docker.get_container(service).start()
-            print(f"Started container {service}.")
+            # Pods are automatically recreated by deployment/replicaset, so we just wait
+            print(f"Pod for service {service} will be automatically recreated by deployment.")
+            # Optionally, we can scale deployment to ensure pod is running
+            try:
+                self.kubectl.exec_command(f"kubectl scale deployment {service} --replicas=1 -n {self.namespace}")
+                print(f"Ensured deployment {service} has 1 replica.")
+            except Exception as e:
+                print(f"Warning: Could not scale deployment {service}: {e}")
             
     def inject_model_misconfig(self, microservices: list[str]):
         """Inject a fault to misconfigure the model in the Flower application."""
         for service in microservices:
-            command = f""" docker exec -it {service} sh -c "sed -i '24s/84/80/' /app/.flwr/apps/*/task.py" """
-            self.docker.exec_command(command)
-            print(f"Changed model configuration for service: {service}")
+            try:
+                # Try to find pod by label selector
+                pod_name = None
+                try:
+                    pod_name = self.kubectl.get_pod_name(self.namespace, f"app={service}")
+                except (IndexError, Exception):
+                    try:
+                        pod_name = self.kubectl.get_pod_name(self.namespace, f"io.kompose.service={service}")
+                    except (IndexError, Exception):
+                        # Last fallback: search by pod name containing service name
+                        pod_list = self.kubectl.list_pods(self.namespace)
+                        matching_pods = [p for p in pod_list.items if service in p.metadata.name]
+                        if matching_pods:
+                            pod_name = matching_pods[0].metadata.name
+                
+                if pod_name:
+                    # Execute command in pod using kubectl exec
+                    command = f"""kubectl exec {pod_name} -n {self.namespace} -- sh -c "sed -i '24s/84/80/' /app/.flwr/apps/*/task.py" """
+                    self.kubectl.exec_command(command)
+                    print(f"Changed model configuration for service: {service} (pod: {pod_name})")
+                else:
+                    print(f"Warning: No pod found for service {service} in namespace {self.namespace}")
+            except Exception as e:
+                print(f"Error injecting model misconfig for service {service}: {e}")
             
     def recover_model_misconfig(self, microservices: list[str]):
         for service in microservices:
-            command = f""" docker exec -it {service} sh -c "sed -i '24s/80/84/' /app/.flwr/apps/*/task.py" """
-            self.docker.exec_command(command)
-            print(f"Recovered model configuration for service: {service}")
+            try:
+                # Try to find pod by label selector
+                pod_name = None
+                try:
+                    pod_name = self.kubectl.get_pod_name(self.namespace, f"app={service}")
+                except (IndexError, Exception):
+                    try:
+                        pod_name = self.kubectl.get_pod_name(self.namespace, f"io.kompose.service={service}")
+                    except (IndexError, Exception):
+                        # Last fallback: search by pod name containing service name
+                        pod_list = self.kubectl.list_pods(self.namespace)
+                        matching_pods = [p for p in pod_list.items if service in p.metadata.name]
+                        if matching_pods:
+                            pod_name = matching_pods[0].metadata.name
+                
+                if pod_name:
+                    # Execute command in pod using kubectl exec
+                    command = f"""kubectl exec {pod_name} -n {self.namespace} -- sh -c "sed -i '24s/80/84/' /app/.flwr/apps/*/task.py" """
+                    self.kubectl.exec_command(command)
+                    print(f"Recovered model configuration for service: {service} (pod: {pod_name})")
+                else:
+                    print(f"Warning: No pod found for service {service} in namespace {self.namespace}")
+            except Exception as e:
+                print(f"Error recovering model misconfig for service {service}: {e}")
             
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
