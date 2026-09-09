@@ -15,14 +15,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def count_message_tokens(message, enc):
+def count_message_tokens(message, enc=None):
     # Each message format adds ~4 tokens of overhead
     tokens = 4  # <|start|>role/name + content + <|end|>
-    tokens += len(enc.encode(message.get("content", "")))
+    content = message.get("content", "")
+    if enc:
+        tokens += len(enc.encode(content))
+    else:
+        # Fallback: approximate token count (roughly 4 characters per token)
+        tokens += len(content) // 4
     return tokens
 
 def trim_history_to_token_limit(history, max_tokens=90000, model="gpt-4"):
-    enc = tiktoken.encoding_for_model(model)
+    try:
+        # 1. 먼저 자동으로 시도
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+        # 2. 실패하면 최신 인코딩(o200k_base)을 강제로 사용
+        try:
+            print(f"Warning: {model} not found in tiktoken. Using o200k_base.")
+            enc = tiktoken.get_encoding("o200k_base")
+        except Exception:
+            # 3. 그마저도 실패하면 기본 방식으로 계산 (인코딩 없이)
+            print(f"Warning: Could not load tiktoken encoding. Using character-based approximation.")
+            enc = None
 
     trimmed = []
     total_tokens = 0
@@ -33,7 +49,12 @@ def trim_history_to_token_limit(history, max_tokens=90000, model="gpt-4"):
 
     if last_msg_tokens > max_tokens:
         # If even the last message is too big, truncate its content
-        truncated_content = enc.decode(enc.encode(last_msg["content"])[:max_tokens - 4])
+        if enc:
+            truncated_content = enc.decode(enc.encode(last_msg["content"])[:max_tokens - 4])
+        else:
+            # Fallback: truncate by character count (roughly 4 chars per token)
+            max_chars = (max_tokens - 4) * 4
+            truncated_content = last_msg["content"][:max_chars]
         return [{"role": last_msg["role"], "content": truncated_content}]
     
     trimmed.insert(0, last_msg)
