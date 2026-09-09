@@ -17,6 +17,8 @@
         "release_name": "astronomy-shop",
         "chart_path": "open-telemetry/opentelemetry-demo",
         "namespace": "astronomy-shop",
-        "remote_chart": true
+        "remote_chart": true,
+        "_comment_version": "Pinned to match the chart vendored in the aiopslab-applications submodule. Unpinned, `helm install` takes whatever is newest in the remote repo, which is not what this repo was written against: as of 2025-09 that is 0.41.0, which renamed loadGeneratorFloodHomepage to loadGeneratorTraffic/loadGeneratorVUs and so breaks the astronomy_shop_loadgenerator_flood_homepage-* problems outright. Results are also not reproducible across time without this.",
+        "version": "0.37.2"
     }
 }

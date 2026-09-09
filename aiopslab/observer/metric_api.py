@@ -40,7 +40,7 @@ normal_metrics = [
     "container_spec_cpu_shares",
     # threads
     "container_threads",
-    "container_threads_max"
+    "container_threads_max",
     # network
     "container_network_receive_errors_total",
     "container_network_receive_packets_dropped_total",
@@ -370,8 +370,6 @@ class PrometheusAPI:
                         dt.to_csv(f, header=False, index=False)
                 else:
                     dt.to_csv(file_path, index=False)
-            self.cleanup() # Stop port-forwarding after metrics are exported
-
             # # for metric in istio_metrics:
             #     data_raw = self.client.custom_query_range(f"{metric}{{namespace='{namespace}'}}", time_format_transform(start_time), time_format_transform(current_et), step=step)
             #     if len(data_raw) == 0:
@@ -405,7 +403,13 @@ class PrometheusAPI:
             #     else:
             #         dt.to_csv(file_path, index=False)
             start_time = current_et
-            
+
+        # Stop port-forwarding only after every chunk has been exported.
+        # This used to sit inside the `while` loop, which tore the forward
+        # down after the first 2-hour chunk and left every later chunk
+        # querying a closed port.
+        self.cleanup()
+
         # Print the folder structure
         export_msg = f"Metrics data exported to directory: {save_path}\n\nFolder structure of exported metrics:\n"
         for root, dirs, files in os.walk(save_path):

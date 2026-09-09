@@ -26,6 +26,9 @@ load_dotenv()
 CACHE_DIR = Path("./cache_dir")
 CACHE_PATH = CACHE_DIR / "cache.json"
 GPT_MODEL = "gpt-4o"
+DEEPSEEK_MODEL = "deepseek-reasoner"
+QWEN_MODEL = "qwq-32b"
+LLAMA_MODEL = "llama-3.1-8b-instant"
 
 
 @dataclass
@@ -35,9 +38,19 @@ class AzureConfig:
 
 
 class Cache:
-    """A simple cache implementation to store the results of the LLM inference."""
+    """A simple cache implementation to store the results of the LLM inference.
 
-    def __init__(self) -> None:
+    `namespace` identifies which model and sampling settings produced an
+    entry. Without it the key is just the message list, so a cache filled
+    by one model is served back to a different one -- and any comparison
+    across models silently reports the first model's answers for both.
+    Changing an existing cache's namespace simply misses and refetches,
+    which is the intended behaviour for entries whose provenance is
+    unknown.
+    """
+
+    def __init__(self, namespace: str = "") -> None:
+        self.namespace = namespace
         if os.path.exists(CACHE_PATH):
             with open(CACHE_PATH) as f:
                 self.cache_dict = json.load(f)
@@ -45,11 +58,12 @@ class Cache:
             os.makedirs(CACHE_DIR, exist_ok=True)
             self.cache_dict = {}
 
-    @staticmethod
-    def process_payload(payload):
+    def process_payload(self, payload):
         if isinstance(payload, (list, dict)):
-            return json.dumps(payload)
-        return payload
+            body = json.dumps(payload)
+        else:
+            body = str(payload)
+        return f"{self.namespace}\x00{body}" if self.namespace else body
 
     def get_from_cache(self, payload):
         payload_cache = self.process_payload(payload)
@@ -70,7 +84,13 @@ class GPTClient:
     """Abstraction for OpenAI's GPT series model."""
 
     def __init__(self, auth_type: str = "key", api_key: Optional[str] = None, azure_config_file: Optional[str] = None, use_cache: bool = True):
-        self.cache = Cache()
+        # `use_cache` used to be accepted and then ignored, so there was
+        # no way to turn caching off. That matters for any experiment
+        # that repeats a problem: the first step of every repeat sends an
+        # identical payload, so it is served from cache and the repeats
+        # stop being independent. `inference`/`run` already guard on
+        # `self.cache is not None`.
+        self.cache = Cache(namespace=GPT_MODEL) if use_cache else None
         self.client = self._setup_client(auth_type, api_key, azure_config_file)
 
     def _load_azure_config(self, yaml_file_path: str) -> AzureConfig:
@@ -148,7 +168,7 @@ class DeepSeekClient:
     """Abstraction for DeepSeek model."""
 
     def __init__(self):
-        self.cache = Cache()
+        self.cache = Cache(namespace=DEEPSEEK_MODEL)
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -161,7 +181,7 @@ class DeepSeekClient:
         try:
             response = client.chat.completions.create(
                 messages=payload,  # type: ignore
-                model="deepseek-reasoner",
+                model=DEEPSEEK_MODEL,
                 max_tokens=1024,
                 stop=[],
             )
@@ -184,7 +204,7 @@ class QwenClient:
     """Abstraction for Qwen's model. Some Qwen models only support streaming output."""
 
     def __init__(self):
-        self.cache = Cache()
+        self.cache = Cache(namespace=QWEN_MODEL)
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -198,7 +218,7 @@ class QwenClient:
             # TODO: Add constraints for the input context length
             response = client.chat.completions.create(
                 messages=payload,  # type: ignore
-                model="qwq-32b",
+                model=QWEN_MODEL,
                 max_tokens=1024,
                 n=1,
                 timeout=60,
@@ -245,7 +265,7 @@ class vLLMClient:
                  temperature=1.0,
                  top_p=0.95,
                  max_tokens=1024):
-        self.cache = Cache()
+        self.cache = Cache(namespace=f"{model}|t={temperature}|p={top_p}|m={max_tokens}")
         self.model = model
         self.repetition_penalty = repetition_penalty
         self.temperature = temperature
@@ -290,7 +310,7 @@ class OpenRouterClient:
     """Abstraction for OpenRouter API with support for multiple models."""
 
     def __init__(self, model="anthropic/claude-3.5-sonnet"):
-        self.cache = Cache()
+        self.cache = Cache(namespace=model)
         self.model = model
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
@@ -334,7 +354,7 @@ class LLaMAClient:
     """Abstraction for Meta's LLaMA-3 model."""
 
     def __init__(self):
-        self.cache = Cache()
+        self.cache = Cache(namespace=LLAMA_MODEL)
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -346,7 +366,7 @@ class LLaMAClient:
         try:
             response = client.chat.completions.create(
                 messages=payload,
-                model="llama-3.1-8b-instant",
+                model=LLAMA_MODEL,
                 max_tokens=1024,
                 temperature=0.5,
                 top_p=0.95,
