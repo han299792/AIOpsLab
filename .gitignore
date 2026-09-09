@@ -360,3 +360,12 @@ aiopslab/observer/prometheus/prometheus/Chart.lock
 # Ignore customized config files
 aiopslab/config.yml
 scripts/ansible/inventory.yml
+
+# --- aiopslab-quiet ---
+# Raw telemetry is tens of MB per run and lives only on the lab machine.
+# Small artifacts (manifest/verdict/cost/session) are committed.
+aiopslab-quiet/runs/**/telemetry/
+aiopslab-quiet/runs/**/raw_*.json
+aiopslab-quiet/.venv/
+aiopslab-quiet/**/__pycache__/
+aiopslab-quiet/**/.pytest_cache/
