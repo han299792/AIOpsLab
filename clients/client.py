@@ -13,7 +13,7 @@ def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Run an AIOpsLab agent")
     parser.add_argument("--agent", type=str, required=True, 
-                        choices=["gpt", "qwen", "deepseek", "vllm"],
+                        choices=["gpt", "qwen", "deepseek", "vllm", "openrouter", "claude"],
                         help="The agent implementation to use")
     parser.add_argument("--problem-id", type=str, 
                         default="misconfig_app_hotel_res-mitigation-1",

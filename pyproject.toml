@@ -11,6 +11,7 @@ importlib = "^1.0.4"
 black = "^24.4.2"
 pyright = "^1.1.366"
 openai = "^1.33.0"
+anthropic = "^0.40"
 pydantic = "^2.7.4"
 kubernetes = "^30.1.0"
 urllib3 = "<2.6.0"  # Fix compatibility issue with kubernetes client (getheaders() removed in urllib3 2.6.0+)

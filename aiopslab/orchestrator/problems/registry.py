@@ -20,7 +20,6 @@ from aiopslab.orchestrator.problems.cart_service_failure import *
 from aiopslab.orchestrator.problems.image_slow_load import *
 from aiopslab.orchestrator.problems.kafka_queue_problems import *
 from aiopslab.orchestrator.problems.loadgenerator_flood_homepage import *
-from aiopslab.orchestrator.problems.payment_failure_dose import *
 from aiopslab.orchestrator.problems.payment_service_failure import *
 from aiopslab.orchestrator.problems.payment_service_unreachable import *
 from aiopslab.orchestrator.problems.product_catalog_failure import *
@@ -188,22 +187,6 @@ class ProblemRegistry:
             "astronomy_shop_loadgenerator_flood_homepage-localization-1": LoadGeneratorFloodHomepageLocalization,
             "astronomy_shop_payment_service_failure-detection-1": PaymentServiceFailureDetection,
             "astronomy_shop_payment_service_failure-localization-1": PaymentServiceFailureLocalization,
-            # Graded doses of the same paymentFailure flag. `_00` is the
-            # sham control: identical ConfigMap write and flagd rollout
-            # restart, no behavioural effect, ground truth "No". It is the
-            # null arm -- not noop_detection_astronomy_shop-1, which skips
-            # the rollout entirely and would leave its pod churn
-            # uncancelled in every other arm.
-            "payment_dose_00_sham-detection-1": lambda: PaymentFailureDoseDetection(variant="off"),
-            "payment_dose_10-detection-1": lambda: PaymentFailureDoseDetection(variant="10%"),
-            "payment_dose_25-detection-1": lambda: PaymentFailureDoseDetection(variant="25%"),
-            "payment_dose_50-detection-1": lambda: PaymentFailureDoseDetection(variant="50%"),
-            "payment_dose_75-detection-1": lambda: PaymentFailureDoseDetection(variant="75%"),
-            "payment_dose_90-detection-1": lambda: PaymentFailureDoseDetection(variant="90%"),
-            "payment_dose_100-detection-1": lambda: PaymentFailureDoseDetection(variant="100%"),
-            "payment_dose_10-localization-1": lambda: PaymentFailureDoseLocalization(variant="10%"),
-            "payment_dose_50-localization-1": lambda: PaymentFailureDoseLocalization(variant="50%"),
-            "payment_dose_100-localization-1": lambda: PaymentFailureDoseLocalization(variant="100%"),
             "astronomy_shop_payment_service_unreachable-detection-1": PaymentServiceUnreachableDetection,
             "astronomy_shop_payment_service_unreachable-localization-1": PaymentServiceUnreachableLocalization,
             "astronomy_shop_product_catalog_service_failure-detection-1": ProductCatalogServiceFailureDetection,
