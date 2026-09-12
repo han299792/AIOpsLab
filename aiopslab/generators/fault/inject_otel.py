@@ -1,7 +1,10 @@
 import json
-import subprocess
 from aiopslab.generators.fault.base import FaultInjector
 from aiopslab.service.kubectl import KubeCtl
+
+
+class ConfigMapMissing(Exception):
+    """The flagd ConfigMap is not there -- usually the namespace is gone."""
 
 
 class OtelFaultInjector(FaultInjector):
@@ -13,6 +16,34 @@ class OtelFaultInjector(FaultInjector):
         self.namespace = namespace
         self.kubectl = KubeCtl()
         self.configmap_name = "flagd-config"
+
+    def _read_flags(self) -> dict:
+        """Fetch and parse the flagd ConfigMap.
+
+        ``exec_command`` returns *stderr as an ordinary string* when kubectl
+        fails, so the original ``except subprocess.CalledProcessError`` here
+        could never fire: a missing ConfigMap fell through to the JSON decode
+        and was reported as "Error decoding JSON", naming the wrong cause.
+        ``raise_on_error=True`` makes the two cases distinguishable.
+        """
+        command = (
+            f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
+        )
+        try:
+            output = self.kubectl.exec_command(command, raise_on_error=True)
+        except RuntimeError as exc:
+            raise ConfigMapMissing(
+                f"ConfigMap '{self.configmap_name}' not readable in namespace "
+                f"'{self.namespace}': {exc}"
+            ) from exc
+        try:
+            configmap = json.loads(output)
+            return json.loads(configmap["data"]["demo.flagd.json"])
+        except (json.JSONDecodeError, KeyError) as exc:
+            raise ValueError(
+                f"ConfigMap '{self.configmap_name}' is present but its "
+                f"demo.flagd.json is unreadable: {exc}"
+            ) from exc
 
     def inject_fault(self, feature_flag: str, variant: str | None = None):
         """Enable a flagd feature flag.
@@ -30,22 +61,7 @@ class OtelFaultInjector(FaultInjector):
         written to the ConfigMap and flagd would quietly serve the
         default, producing a no-op that still gets scored as a fault.
         """
-        command = (
-            f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
-        )
-        try:
-            output = self.kubectl.exec_command(command)
-            configmap = json.loads(output)
-        except subprocess.CalledProcessError:
-            raise ValueError(
-                f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'."
-            )
-        except json.JSONDecodeError:
-            raise ValueError(
-                f"Error decoding JSON for ConfigMap '{self.configmap_name}'."
-            )
-
-        flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
+        flagd_data = self._read_flags()
 
         if feature_flag not in flagd_data["flags"]:
             raise ValueError(
@@ -74,22 +90,21 @@ class OtelFaultInjector(FaultInjector):
         print(f"Fault injected: Feature flag '{feature_flag}' set to '{chosen}'.")
 
     def recover_fault(self, feature_flag: str):
-        command = (
-            f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
-        )
-        try:
-            output = self.kubectl.exec_command(command)
-            configmap = json.loads(output)
-        except subprocess.CalledProcessError:
-            raise ValueError(
-                f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'."
-            )
-        except json.JSONDecodeError:
-            raise ValueError(
-                f"Error decoding JSON for ConfigMap '{self.configmap_name}'."
-            )
+        """Turn the flag off. A no-op once the namespace is gone.
 
-        flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
+        The orchestrator registers an ``atexit`` hook that recovers the fault,
+        and the campaign's own teardown has usually already uninstalled the
+        release by then. Raising here turns an ordinary clean exit into a
+        traceback that looks like a failed recovery.
+        """
+        try:
+            flagd_data = self._read_flags()
+        except ConfigMapMissing:
+            print(
+                f"Fault recovery skipped: no '{self.configmap_name}' in "
+                f"namespace '{self.namespace}' (already torn down)."
+            )
+            return
 
         if feature_flag in flagd_data["flags"]:
             flagd_data["flags"][feature_flag]["defaultVariant"] = "off"
