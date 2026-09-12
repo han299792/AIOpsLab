@@ -15,6 +15,13 @@ Three differences from the existing clients, all deliberate:
   list alone, so repeated runs of the same problem are served from disk and stop
   being independent -- which silently destroys the variance any repeated
   experiment is trying to measure. Pass ``use_cache=True`` to opt in.
+* **Prompt caching on by default.** Not the same thing as the response cache
+  above, and worth separating carefully: prompt caching is a server-side cache
+  of the *prefix*, so the model still generates a fresh response every call and
+  independence is untouched -- it only makes the resent history cheap. An agent
+  loop resends its whole history each step, so input tokens grow with the square
+  of the step count; at twenty steps that is the difference between roughly
+  $1.30 and $0.30 a run. Disable with ``prompt_cache=False``.
 * **Deterministic by default** (``effort="low"``, no sampling knobs), so that
   variance across repeats comes from the environment rather than from decoding.
 
@@ -52,6 +59,7 @@ class ClaudeClient:
         max_tokens: int = 4096,
         effort: str = "low",
         use_cache: bool = False,
+        prompt_cache: bool = True,
     ):
         # Imported here so that merely importing this module does not require
         # the SDK to be installed -- the agent registry imports every client.
@@ -66,6 +74,7 @@ class ClaudeClient:
         self.model = model
         self.max_tokens = max_tokens
         self.effort = effort
+        self.prompt_cache = prompt_cache
 
         if use_cache:
             from clients.utils.llm import Cache
@@ -102,12 +111,20 @@ class ClaudeClient:
             if hit is not None:
                 return hit
 
+        kwargs = {}
+        if self.prompt_cache:
+            # Top-level auto-caching: caches the last cacheable block, so the
+            # prefix grows with the conversation and each step reads back the
+            # history it just paid to write.
+            kwargs["cache_control"] = {"type": "ephemeral"}
+
         response = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
             system=system,
             messages=messages,
             output_config={"effort": self.effort},
+            **kwargs,
         )
         self._record(response.usage)
 
@@ -131,9 +148,11 @@ class ClaudeClient:
 
 
 class ClaudeAgent:
-    def __init__(self, model: str = CLAUDE_MODEL, use_cache: bool = False):
+    def __init__(self, model: str = CLAUDE_MODEL, use_cache: bool = False,
+                 prompt_cache: bool = True):
         self.history = []
-        self.llm = ClaudeClient(model=model, use_cache=use_cache)
+        self.llm = ClaudeClient(model=model, use_cache=use_cache,
+                                prompt_cache=prompt_cache)
 
     def init_context(self, problem_desc: str, instructions: str, apis: dict):
         """Initialize the context for the agent."""
